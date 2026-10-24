@@ -195,31 +195,24 @@ h1 span:last-child { color: var(--red); }
 .btn:hover { background: var(--red); color: var(--ink); }
 .btn:focus-visible { outline: 2px solid var(--champagne); outline-offset: 3px; }
 
+/* Video theater */
 .theater {
   position: fixed;
   inset: 0;
   z-index: 20;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 18px;
-  padding:
-    max(16px, env(safe-area-inset-top, 0px))
-    max(16px, env(safe-area-inset-right, 0px))
-    max(16px, env(safe-area-inset-bottom, 0px))
-    max(16px, env(safe-area-inset-left, 0px));
-  background: rgba(6, 6, 7, 0.95);
+  background: #000;
   animation: fade 0.5s ease both;
 }
-.frame {
-  width: min(100%, 520px);
-  padding: 8px;
-  border: 1px solid var(--line);
-  background: var(--ink);
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6), 0 0 60px rgba(224, 48, 63, 0.12);
+.frame { position: absolute; inset: 0; }
+.frame video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.theater .btn {
+  position: absolute;
+  top: max(14px, env(safe-area-inset-top, 0px));
+  inset-inline-start: max(14px, env(safe-area-inset-left, 0px));
+  background: rgba(10, 10, 11, 0.6);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
 }
-.frame video { display: block; width: 100%; max-height: 70vh; background: #000; }
 
 @keyframes float { from { transform: translateY(0); } to { transform: translateY(-8px); } }
 @keyframes halo { from { opacity: 0.35; } to { opacity: 0.65; } }
@@ -450,10 +443,77 @@ img{max-width:100%}
   });
   vid.addEventListener('ended', function () { window.setTimeout(closeTheater, 800); });
 
+  /* ---------- sound ---------- */
+  var AC = window.AudioContext || window.webkitAudioContext, ac = null;
+  function unlockAudio() {
+    try {
+      if (!ac && AC) ac = new AC();
+      if (ac && ac.state === 'suspended') ac.resume();
+    } catch (e) {}
+  }
+  function tone(freq, t0, dur, type, vol) {
+    var o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(ac.destination);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+  }
+  function playOpenSound() {
+    if (!ac) return;
+    try {
+      var t = ac.currentTime + 0.02;
+      // soft pop
+      var po = ac.createOscillator(), pg = ac.createGain();
+      po.type = 'sine';
+      po.frequency.setValueAtTime(260, t);
+      po.frequency.exponentialRampToValueAtTime(70, t + 0.22);
+      pg.gain.setValueAtTime(0.0001, t);
+      pg.gain.exponentialRampToValueAtTime(0.5, t + 0.01);
+      pg.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+      po.connect(pg); pg.connect(ac.destination); po.start(t); po.stop(t + 0.3);
+      // whoosh
+      var len = Math.floor(ac.sampleRate * 0.7);
+      var buf = ac.createBuffer(1, len, ac.sampleRate), d = buf.getChannelData(0);
+      for (var q = 0; q < len; q++) d[q] = Math.random() * 2 - 1;
+      var ns = ac.createBufferSource(); ns.buffer = buf;
+      var bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 0.8;
+      bp.frequency.setValueAtTime(500, t); bp.frequency.exponentialRampToValueAtTime(4200, t + 0.6);
+      var ng = ac.createGain();
+      ng.gain.setValueAtTime(0.0001, t);
+      ng.gain.exponentialRampToValueAtTime(0.18, t + 0.15);
+      ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.7);
+      ns.connect(bp); bp.connect(ng); ng.connect(ac.destination); ns.start(t); ns.stop(t + 0.72);
+      // sparkle
+      var notes = [784, 988, 1175, 1568, 1976, 2349];
+      for (var k = 0; k < notes.length; k++) {
+        tone(notes[k], t + 0.12 + k * 0.085, 0.9, 'sine', 0.16);
+        tone(notes[k] * 2, t + 0.12 + k * 0.085, 0.5, 'triangle', 0.04);
+      }
+    } catch (e) {}
+  }
+
   /* ---------- flow ---------- */
+  function unlockVideo() {
+    if (videoState === 'fail') return;
+    try {
+      vid.muted = true;
+      var p = vid.play();
+      if (p && p.then) {
+        p.then(function () {
+          if (theater.hidden) { vid.pause(); try { vid.currentTime = 0; } catch (e) {} }
+          vid.muted = false;
+        }).catch(function () { vid.muted = false; });
+      }
+    } catch (e) { vid.muted = false; }
+  }
+
   function openGift() {
     if (opened) return;
     opened = true;
+    unlockAudio();
+    unlockVideo();
     gift.setAttribute('aria-expanded', 'true');
     hint.textContent = 'هدیه باز شد';
     if (!reduce) gift.classList.add('shake');
@@ -461,10 +521,11 @@ img{max-width:100%}
       gift.classList.remove('shake');
       gift.classList.add('open');
       stage.classList.add('open');
+      playOpenSound();
       var r = gift.getBoundingClientRect();
       burst(r.left + r.width / 2, r.top + r.height * 0.4, 120);
-      window.setTimeout(afterOpen, reduce ? 200 : 1700);
-    }, reduce ? 0 : 550);
+      window.setTimeout(afterOpen, reduce ? 200 : 1100);
+    }, reduce ? 0 : 500);
   }
 
   function afterOpen() {
@@ -472,9 +533,24 @@ img{max-width:100%}
     openTheater();
   }
 
+  function enterFullscreen() {
+    var rf = theater.requestFullscreen || theater.webkitRequestFullscreen;
+    if (!rf) return;
+    try { var r = rf.call(theater); if (r && r.catch) r.catch(function () {}); } catch (e) {}
+  }
+
+  function leaveFullscreen() {
+    var fe = document.fullscreenElement || document.webkitFullscreenElement;
+    if (!fe) return;
+    var ex = document.exitFullscreen || document.webkitExitFullscreen;
+    try { var r = ex.call(document); if (r && r.catch) r.catch(function () {}); } catch (e) {}
+  }
+
   function openTheater() {
     theater.hidden = false;
     document.body.classList.add('lock');
+    enterFullscreen();
+    vid.muted = false;
     try { vid.currentTime = 0; } catch (e) {}
     var p = vid.play();
     if (p && p.catch) p.catch(function () {});
@@ -484,6 +560,7 @@ img{max-width:100%}
   function closeTheater() {
     if (theater.hidden) return;
     vid.pause();
+    leaveFullscreen();
     theater.hidden = true;
     document.body.classList.remove('lock');
     reveal();
@@ -494,10 +571,10 @@ img{max-width:100%}
     revealed = true;
     letter.hidden = false;
     if (videoState === 'ok') replay.hidden = false;
-    window.requestAnimationFrame(function () {
+    window.setTimeout(function () {
       letter.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
-    });
-    window.setTimeout(function () { burst(W / 2, H * 0.28, 70); }, 500);
+    }, 250);
+    window.setTimeout(function () { burst(W / 2, H * 0.28, 70); }, 600);
   }
 
   gift.addEventListener('click', openGift);
